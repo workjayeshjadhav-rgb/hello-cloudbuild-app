@@ -1,9 +1,6 @@
 steps:
-  # --------------------------
-  # Step 0: Run tests
-  # --------------------------
-  - id: "Test"
-    name: "python:3.7-slim"
+  - id: Test
+    name: python:3.7-slim
     entrypoint: bash
     args:
       - -c
@@ -11,20 +8,15 @@ steps:
         pip install flask
         python -m unittest test_app.py
 
-  # --------------------------
-  # Step 1: Build image using Kaniko
-  # --------------------------
-  - id: "Build"
-    name: "gcr.io/kaniko-project/executor:latest"
+  - id: Build
+    name: gcr.io/kaniko-project/executor:latest
     args:
       - --dockerfile=Dockerfile
+      - --context=.
       - --destination=us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
 
-  # --------------------------
-  # Step 2: Deploy (CD)
-  # --------------------------
-  - id: "Deploy"
-    name: "gcr.io/cloud-builders/git"
+  - id: Deploy
+    name: gcr.io/cloud-builders/git
     entrypoint: bash
     args:
       - -c
@@ -32,17 +24,16 @@ steps:
         echo "=== Setting up SSH authentication ==="
         mkdir -p ~/.ssh
 
-        # Load SSH private key from Secret Manager
         gcloud secrets versions access latest --secret=ssh_key_secret > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
 
-        # Add GitHub known hosts
         cp known_hosts.github ~/.ssh/known_hosts
         chmod 600 ~/.ssh/known_hosts
 
         echo "=== Cloning environment repo ==="
         rm -rf hello-cloudbuild-env || true
-        git clone git@github.com:workjayeshjadhav-rgb/hello-cloudbuild-env.git
+        GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes" \
+          git clone git@github.com:workjayeshjadhav-rgb/hello-cloudbuild-env.git
 
         cd hello-cloudbuild-env
 
@@ -56,9 +47,9 @@ steps:
         echo "=== Creating commit for CD trigger ==="
         git commit --allow-empty -m "CD pipeline deployment update"
 
-        echo "=== Pushing to candidate branch ==="
-        git push origin candidate
+        echo "=== Pushing to candidate ==="
+        GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes" \
+          git push origin candidate
 
 images:
   - us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
-
