@@ -1,100 +1,65 @@
-# Copyright 2018 Google LLC
-
 steps:
-- name: 'python:3.7-slim'
+# -----------------------------------------------------------
+# 1. Run Unit Tests
+# -----------------------------------------------------------
+- name: "python:3.7-slim"
   id: Test
   entrypoint: /bin/sh
   args:
-  - -c
-  - 'pip install flask && python test_app.py -v'
+    - -c
+    - |
+      pip install flask
+      python test_app.py -v
 
-- name: 'gcr.io/cloud-builders/docker'
+# -----------------------------------------------------------
+# 2. Build Image Using Kaniko
+# -----------------------------------------------------------
+- name: "gcr.io/kaniko-project/executor:latest"
   id: Build
   args:
-  - 'build'
-  - '-t'
-  - 'us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA'
-  - '.'
+    - --destination=us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
+    - --dockerfile=./Dockerfile
+    - --context=.
 
-- name: 'gcr.io/cloud-builders/docker'
-  id: Push
+# -----------------------------------------------------------
+# 3. CD Step - Push commit to candidate branch of hello-cloudbuild-env
+# -----------------------------------------------------------
+- name: "gcr.io/cloud-builders/git"
+  id: Deploy
+  entrypoint: bash
   args:
-  - 'push'
-  - 'us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA'
+    - -c
+    - |
+      echo "=== Setting up SSH authentication ==="
+      mkdir -p ~/.ssh
 
+      # Load private SSH key from Secret Manager
+      gcloud secrets versions access latest --secret=ssh_key_secret > ~/.ssh/id_rsa
+      chmod 600 ~/.ssh/id_rsa
 
-# === SSH setup for pushing to hello-cloudbuild-env ===
-- name: 'gcr.io/cloud-builders/git'
-  secretEnv: ['SSH_KEY']
-  entrypoint: 'bash'
-  args:
-  - -c
-  - |
-    echo "$$SSH_KEY" >> /root/.ssh/id_rsa
-    chmod 400 /root/.ssh/id_rsa
-    cp known_hosts.github /root/.ssh/known_hosts
-  volumes:
-  - name: 'ssh'
-    path: /root/.ssh
+      # Load known_hosts
+      cp known_hosts.github ~/.ssh/known_hosts
 
-# Clone env repo
-- name: 'gcr.io/cloud-builders/git'
-  args:
-  - clone
-  - --recurse-submodules
-  - git@github.com:workjayeshjadhav-rgb/hello-cloudbuild-env.git
-  volumes:
-  - name: ssh
-    path: /root/.ssh
+      echo "=== Cloning environment repo ==="
+      git clone git@github.com:workjayeshjadhav-rgb/hello-cloudbuild-env.git
+      cd hello-cloudbuild-env
 
-# Checkout candidate branch
-- name: 'gcr.io/cloud-builders/gcloud'
-  id: Change directory
-  entrypoint: /bin/sh
-  args:
-  - '-c'
-  - |
-    cd hello-cloudbuild-env && \
-    git checkout candidate && \
-    git config user.email $(gcloud auth list --filter=status:ACTIVE --format='value(account)')
-  volumes:
-  - name: ssh
-    path: /root/.ssh
+      echo "=== Checkout candidate branch ==="
+      git checkout candidate
 
-# Generate updated manifest
-- name: 'gcr.io/cloud-builders/gcloud'
-  id: Generate manifest
-  entrypoint: /bin/sh
-  args:
-  - '-c'
-  - |
-     sed "s/GOOGLE_CLOUD_PROJECT/${PROJECT_ID}/g" kubernetes.yaml.tpl | \
-     sed "s/COMMIT_SHA/${SHORT_SHA}/g" > hello-cloudbuild-env/kubernetes.yaml
-  volumes:
-  - name: ssh
-    path: /root/.ssh
+      echo "=== Configure Git identity ==="
+      git config user.email "cloudbuild@google.com"
+      git config user.name "Cloud Build"
 
-# Commit + push manifest → candidate branch
-- name: 'gcr.io/cloud-builders/gcloud'
-  id: Push manifest
-  entrypoint: /bin/sh
-  args:
-  - '-c'
-  - |
-    set -x && \
-    cd hello-cloudbuild-env && \
-    git add kubernetes.yaml && \
-    git commit -m "Deploying image us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:${SHORT_SHA}" && \
-    git push origin candidate
-  volumes:
-  - name: ssh
-    path: /root/.ssh
+      echo "=== Creating commit for CD trigger ==="
+      git commit --allow-empty -m "CD pipeline deployment update"
 
-availableSecrets:
-  secretManager:
-  - versionName: projects/${PROJECT_NUMBER}/secrets/ssh_key_secret/versions/1
-    env: 'SSH_KEY'
+      echo "=== Pushing to candidate branch ==="
+      git push origin candidate
 
+# -----------------------------------------------------------
+# Cloud Build Options
+# -----------------------------------------------------------
 options:
   logging: CLOUD_LOGGING_ONLY
 
