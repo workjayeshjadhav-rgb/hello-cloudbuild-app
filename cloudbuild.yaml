@@ -1,5 +1,6 @@
+# Copyright 2018 Google LLC
+
 steps:
-# Run unit tests
 - name: 'python:3.7-slim'
   id: Test
   entrypoint: /bin/sh
@@ -7,15 +8,93 @@ steps:
   - -c
   - 'pip install flask && python test_app.py -v'
 
-# Build using Kaniko
-- name: 'gcr.io/kaniko-project/executor:latest'
+- name: 'gcr.io/cloud-builders/docker'
   id: Build
   args:
-    - --destination=us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
-    - --dockerfile=./Dockerfile
-    - --context=.
+  - 'build'
+  - '-t'
+  - 'us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA'
+  - '.'
 
-# No push step needed; Kaniko pushes automatically
+- name: 'gcr.io/cloud-builders/docker'
+  id: Push
+  args:
+  - 'push'
+  - 'us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA'
+
+
+# === SSH setup for pushing to hello-cloudbuild-env ===
+- name: 'gcr.io/cloud-builders/git'
+  secretEnv: ['SSH_KEY']
+  entrypoint: 'bash'
+  args:
+  - -c
+  - |
+    echo "$$SSH_KEY" >> /root/.ssh/id_rsa
+    chmod 400 /root/.ssh/id_rsa
+    cp known_hosts.github /root/.ssh/known_hosts
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+
+# Clone env repo
+- name: 'gcr.io/cloud-builders/git'
+  args:
+  - clone
+  - --recurse-submodules
+  - git@github.com:workjayeshjadhav-rgb/hello-cloudbuild-env.git
+  volumes:
+  - name: ssh
+    path: /root/.ssh
+
+# Checkout candidate branch
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Change directory
+  entrypoint: /bin/sh
+  args:
+  - '-c'
+  - |
+    cd hello-cloudbuild-env && \
+    git checkout candidate && \
+    git config user.email $(gcloud auth list --filter=status:ACTIVE --format='value(account)')
+  volumes:
+  - name: ssh
+    path: /root/.ssh
+
+# Generate updated manifest
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Generate manifest
+  entrypoint: /bin/sh
+  args:
+  - '-c'
+  - |
+     sed "s/GOOGLE_CLOUD_PROJECT/${PROJECT_ID}/g" kubernetes.yaml.tpl | \
+     sed "s/COMMIT_SHA/${SHORT_SHA}/g" > hello-cloudbuild-env/kubernetes.yaml
+  volumes:
+  - name: ssh
+    path: /root/.ssh
+
+# Commit + push manifest → candidate branch
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Push manifest
+  entrypoint: /bin/sh
+  args:
+  - '-c'
+  - |
+    set -x && \
+    cd hello-cloudbuild-env && \
+    git add kubernetes.yaml && \
+    git commit -m "Deploying image us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:${SHORT_SHA}" && \
+    git push origin candidate
+  volumes:
+  - name: ssh
+    path: /root/.ssh
+
+availableSecrets:
+  secretManager:
+  - versionName: projects/${PROJECT_NUMBER}/secrets/ssh_key_secret/versions/1
+    env: 'SSH_KEY'
 
 options:
   logging: CLOUD_LOGGING_ONLY
+
