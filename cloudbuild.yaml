@@ -7,21 +7,15 @@ steps:
   - -c
   - 'pip install flask && python test_app.py -v'
 
-# Build image
-- name: 'gcr.io/cloud-builders/docker'
+# Build using Kaniko
+- name: 'gcr.io/kaniko-project/executor:latest'
   id: Build
   args:
-  - build
-  - -t
-  - us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
-  - .
+    - --destination=us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
+    - --dockerfile=./Dockerfile
+    - --context=.
 
-# Push image
-- name: 'gcr.io/cloud-builders/docker'
-  id: Push
-  args:
-  - push
-  - us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
+# No push step needed; Kaniko pushes automatically
 
 options:
   logging: CLOUD_LOGGING_ONLY
