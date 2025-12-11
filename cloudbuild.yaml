@@ -1,66 +1,45 @@
+# Copyright 2018 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# [START cloudbuild]
 steps:
-  # --------------------------
-  # Step 0: Run tests
-  # --------------------------
-  - id: "Test"
-    name: "python:3.7-slim"
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        pip install flask
-        python -m unittest test_app.py
+# This step runs the unit tests on the app
+- name: 'python:3.7-slim'
+  id: Test
+  entrypoint: /bin/sh
+  args:
+  - -c
+  - 'pip install flask && python test_app.py -v'
 
-  # --------------------------
-  # Step 1: Build image using Kaniko
-  # --------------------------
-  - id: "Build"
-    name: "gcr.io/kaniko-project/executor:latest"
-    args:
-      - --dockerfile=Dockerfile
-      - --context=.
-      - --destination=us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
+# This step builds the container image.
+- name: 'gcr.io/cloud-builders/docker'
+  id: Build
+  args:
+  - 'build'
+  - '-t'
+  - 'us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA'
+  - '.'
 
-  # --------------------------
-  # Step 2: Deploy (CD)
-  # --------------------------
-  - id: "Deploy"
-    name: "gcr.io/cloud-builders/git"
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        echo "=== Setting up SSH authentication ==="
-        mkdir -p ~/.ssh
+# This step pushes the image to Artifact Registry
+# The PROJECT_ID and SHORT_SHA variables are automatically
+# replaced by Cloud Build.
+- name: 'gcr.io/cloud-builders/docker'
+  id: Push
+  args:
+  - 'push'
+  - 'us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA'
+# [END cloudbuild]
 
-        # Load SSH private key from Secret Manager
-        gcloud secrets versions access latest --secret=ssh_key_secret > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-
-        # Add GitHub known hosts
-        cp known_hosts.github ~/.ssh/known_hosts
-        chmod 600 ~/.ssh/known_hosts
-
-        echo "=== Cloning environment repo ==="
-        rm -rf hello-cloudbuild-env || true
-
-        export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes"
-        git clone git@github.com:workjayeshjadhav-rgb/hello-cloudbuild-env.git
-
-        cd hello-cloudbuild-env
-
-        echo "=== Checkout candidate branch ==="
-        git checkout candidate || git checkout -b candidate
-
-        echo "=== Configure Git identity ==="
-        git config user.email "cloudbuild@google.com"
-        git config user.name "Cloud Build"
-
-        echo "=== Creating empty commit for CD trigger ==="
-        git commit --allow-empty -m "CD pipeline deployment update"
-
-        echo "=== Pushing to candidate branch ==="
-        git push origin candidate
-
-images:
-  - us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
+options:
+  logging: CLOUD_LOGGING_ONLY
