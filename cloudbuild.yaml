@@ -1,65 +1,64 @@
 steps:
-# -----------------------------------------------------------
-# 1. Run Unit Tests
-# -----------------------------------------------------------
-- name: "python:3.7-slim"
-  id: Test
-  entrypoint: /bin/sh
-  args:
-    - -c
-    - |
-      pip install flask
-      python test_app.py -v
+  # --------------------------
+  # Step 0: Run tests
+  # --------------------------
+  - id: "Test"
+    name: "python:3.7-slim"
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        pip install flask
+        python -m unittest test_app.py
 
-# -----------------------------------------------------------
-# 2. Build Image Using Kaniko
-# -----------------------------------------------------------
-- name: "gcr.io/kaniko-project/executor:latest"
-  id: Build
-  args:
-    - --destination=us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
-    - --dockerfile=./Dockerfile
-    - --context=.
+  # --------------------------
+  # Step 1: Build image using Kaniko
+  # --------------------------
+  - id: "Build"
+    name: "gcr.io/kaniko-project/executor:latest"
+    args:
+      - --dockerfile=Dockerfile
+      - --destination=us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
 
-# -----------------------------------------------------------
-# 3. CD Step - Push commit to candidate branch of hello-cloudbuild-env
-# -----------------------------------------------------------
-- name: "gcr.io/cloud-builders/git"
-  id: Deploy
-  entrypoint: bash
-  args:
-    - -c
-    - |
-      echo "=== Setting up SSH authentication ==="
-      mkdir -p ~/.ssh
+  # --------------------------
+  # Step 2: Deploy (CD)
+  # --------------------------
+  - id: "Deploy"
+    name: "gcr.io/cloud-builders/git"
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        echo "=== Setting up SSH authentication ==="
+        mkdir -p ~/.ssh
 
-      # Load private SSH key from Secret Manager
-      gcloud secrets versions access latest --secret=ssh_key_secret > ~/.ssh/id_rsa
-      chmod 600 ~/.ssh/id_rsa
+        # Load SSH private key from Secret Manager
+        gcloud secrets versions access latest --secret=ssh_key_secret > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
 
-      # Load known_hosts
-      cp known_hosts.github ~/.ssh/known_hosts
+        # Add GitHub known hosts
+        cp known_hosts.github ~/.ssh/known_hosts
+        chmod 600 ~/.ssh/known_hosts
 
-      echo "=== Cloning environment repo ==="
-      git clone git@github.com:workjayeshjadhav-rgb/hello-cloudbuild-env.git
-      cd hello-cloudbuild-env
+        echo "=== Cloning environment repo ==="
+        rm -rf hello-cloudbuild-env || true
+        git clone git@github.com:workjayeshjadhav-rgb/hello-cloudbuild-env.git
 
-      echo "=== Checkout candidate branch ==="
-      git checkout candidate
+        cd hello-cloudbuild-env
 
-      echo "=== Configure Git identity ==="
-      git config user.email "cloudbuild@google.com"
-      git config user.name "Cloud Build"
+        echo "=== Checkout candidate branch ==="
+        git checkout candidate || git checkout -b candidate
 
-      echo "=== Creating commit for CD trigger ==="
-      git commit --allow-empty -m "CD pipeline deployment update"
+        echo "=== Configure Git identity ==="
+        git config user.email "cloudbuild@google.com"
+        git config user.name "Cloud Build"
 
-      echo "=== Pushing to candidate branch ==="
-      git push origin candidate
+        echo "=== Creating commit for CD trigger ==="
+        git commit --allow-empty -m "CD pipeline deployment update"
 
-# -----------------------------------------------------------
-# Cloud Build Options
-# -----------------------------------------------------------
-options:
-  logging: CLOUD_LOGGING_ONLY
+        echo "=== Pushing to candidate branch ==="
+        git push origin candidate
+
+images:
+  - us-west1-docker.pkg.dev/$PROJECT_ID/my-repository/hello-cloudbuild:$SHORT_SHA
 
